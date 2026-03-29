@@ -1,0 +1,297 @@
+<!doctype html>
+<html>
+  <head>
+    <title>PDF Extractor Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        background: #f5f7fb;
+      }
+
+      header {
+        padding: 15px 20px;
+        background: #1e293b;
+        color: white;
+        font-size: 18px;
+      }
+
+      .container {
+        display: flex;
+        flex-wrap: wrap;
+        padding: 20px;
+        gap: 20px;
+      }
+
+      #left,
+      #right {
+        flex: 1 1 40%;
+        min-width: 300px;
+      }
+
+      .card {
+        background: white;
+        border-radius: 10px;
+        padding: 15px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+      }
+
+      #dropZone {
+        border: 2px dashed #ccc;
+        padding: 20px;
+        text-align: center;
+        margin-bottom: 10px;
+        cursor: pointer;
+      }
+
+      #dropZone:hover {
+        background: #f0f4ff;
+      }
+
+      .pdf-item {
+        padding: 6px;
+        border-bottom: 1px solid #eee;
+      }
+
+      .duplicate {
+        background: yellow;
+        font-weight: bold;
+      }
+
+      .warning {
+        color: red;
+      }
+
+      button {
+        padding: 8px 12px;
+        margin-top: 10px;
+        border: none;
+        background: #2563eb;
+        color: white;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: #1d4ed8;
+      }
+
+      .small-tip {
+        font-size: 12px;
+        color: #666;
+        margin-top: 5px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <header>PDF Tracking Extractor</header>
+
+    <div class="container">
+      <!-- LEFT PANEL -->
+      <div id="left" class="card">
+        <h3>Upload PDFs</h3>
+
+        <div id="dropZone">Drag & Drop PDFs here or click</div>
+        <input
+          type="file"
+          id="pdfUpload"
+          multiple
+          accept="application/pdf"
+          hidden
+        />
+
+        <button onclick="processPDFs()">Extract Numbers</button>
+        <button onclick="fileInput.click()">Add More PDFs</button>
+        <button onclick="downloadCSV()">Download CSV</button>
+        <button
+          onclick="
+            allFiles = [];
+            displayPDFList();
+            document.getElementById('output').innerHTML = '';
+          "
+        >
+          Clear All
+        </button>
+
+        <h4>PDF List</h4>
+        <div id="pdfList"></div>
+      </div>
+
+      <!-- RIGHT PANEL -->
+      <div id="right" class="card">
+        <h3>Extracted Data</h3>
+        <div id="output"></div>
+      </div>
+    </div>
+
+    <script>
+      let allFiles = [];
+      let extractedData = {};
+      let processedFiles = new Set();
+
+      const dropZone = document.getElementById("dropZone");
+      const fileInput = document.getElementById("pdfUpload");
+
+      dropZone.onclick = () => fileInput.click();
+
+      dropZone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dropZone.style.background = "#eef";
+      });
+
+      dropZone.addEventListener("dragleave", () => {
+        dropZone.style.background = "";
+      });
+
+      dropZone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        addFiles(e.dataTransfer.files);
+      });
+
+      fileInput.addEventListener("change", () => {
+        addFiles(fileInput.files);
+      });
+
+      function addFiles(files) {
+        let newFiles = [];
+
+        for (let file of files) {
+          allFiles.push(file);
+
+          if (!processedFiles.has(file.name)) {
+            newFiles.push(file);
+          }
+        }
+
+        displayPDFList();
+        processNewFiles(newFiles); // auto process only new
+      }
+
+      function displayPDFList() {
+        const list = document.getElementById("pdfList");
+        list.innerHTML = "";
+
+        const fileNames = allFiles.map((f) => f.name);
+        const duplicates = fileNames.filter(
+          (item, index) => fileNames.indexOf(item) !== index,
+        );
+
+        allFiles.forEach((file) => {
+          const isDuplicate = duplicates.includes(file.name);
+
+          list.innerHTML += `
+      <div class="pdf-item ${isDuplicate ? "duplicate" : ""}">
+        ${file.name}
+      </div>
+    `;
+        });
+      }
+
+      async function processNewFiles(files) {
+        const output = document.getElementById("output");
+
+        let allNumbers = Object.values(extractedData).flat();
+
+        for (let file of files) {
+          processedFiles.add(file.name);
+
+          const arrayBuffer = await file.arrayBuffer();
+          const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+          let fullText = "";
+
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            const strings = content.items.map((item) => item.str);
+            fullText += strings.join(" ") + " ";
+          }
+
+          const matches = fullText.match(/\b\d{8,}\b/g);
+
+          if (matches) {
+            extractedData[file.name] = matches;
+            allNumbers.push(...matches);
+          } else {
+            extractedData[file.name] = [];
+          }
+        }
+
+        renderOutput(allNumbers);
+      }
+
+      function renderOutput(allNumbers) {
+        const output = document.getElementById("output");
+        output.innerHTML = "";
+
+        const duplicates = allNumbers.filter(
+          (item, index) => allNumbers.indexOf(item) !== index,
+        );
+
+        for (let file in extractedData) {
+          let numbers = extractedData[file];
+
+          let html = `<div style="margin-bottom:15px;">
+      <strong>${file}</strong>
+    `;
+
+          if (numbers.length > 0) {
+            html += `<button onclick="copyNumbers('${file}', this)">Copy</button><br>`;
+
+            numbers.forEach((num) => {
+              const isDuplicate = duplicates.includes(num);
+              html += `<div class="${isDuplicate ? "duplicate" : ""}">${num}</div>`;
+            });
+          } else {
+            html += `
+        <br><span class="warning">⚠️ No text found (No OCR)</span><br>
+        <button onclick="window.open('https://www.ilovepdf.com/ocr-pdf','_blank')">
+          Perform OCR
+        </button>
+        <div class="small-tip">
+          Tip: Use PDFgear software for faster local OCR
+        </div>
+      `;
+          }
+
+          html += "</div>";
+          output.innerHTML += html;
+        }
+      }
+
+      function copyNumbers(fileName, btn) {
+        const numbers = extractedData[fileName];
+        navigator.clipboard.writeText(numbers.join("\n"));
+
+        // Change button text + style
+        btn.innerText = "Copied";
+        btn.style.background = "#16a34a"; // green
+
+        // Reset after 2 seconds
+        setTimeout(() => {
+          btn.innerText = "Copy";
+          btn.style.background = "#2563eb"; // original blue
+        }, 2000);
+      }
+
+      function downloadCSV() {
+        let csv = "File,Number\n";
+
+        for (let file in extractedData) {
+          extractedData[file].forEach((num) => {
+            csv += `${file},${num}\n`;
+          });
+        }
+
+        const blob = new Blob([csv], { type: "text/csv" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "extracted_data.csv";
+        link.click();
+      }
+    </script>
+  </body>
+</html>
