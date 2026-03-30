@@ -241,7 +241,11 @@
             fullText += strings.join(" ") + " ";
           }
 
-          const matches = fullText.match(/\b\d{8,}\b/g);
+          let matches = fullText.match(/(\d[\d\s]{10,}\d)/g);
+
+          if (matches) {
+            matches = matches.map((num) => num.replace(/\s+/g, ""));
+          }
 
           if (matches) {
             extractedData[file.name] = matches;
