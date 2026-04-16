@@ -64,7 +64,8 @@
       }
 
       .duplicate {
-        background: yellow;
+        background: #f1f97d;
+        color: rgb(255, 24, 24);
         font-weight: bold;
       }
 
@@ -110,6 +111,18 @@
           padding: 10px;
         }
       }
+
+      .delete-btn {
+  float: right;
+  cursor: pointer;
+  display: none;
+  color: red;
+}
+
+.pdf-item:hover .delete-btn {
+  display: inline;
+}
+
     </style>
   </head>
 
@@ -133,15 +146,16 @@
         <button onclick="processPDFs()">Extract Numbers</button>
         <button onclick="fileInput.click()">Add More PDFs</button>
         <button onclick="downloadCSV()">Download CSV</button>
-        <button
-          onclick="
-            allFiles = [];
-            displayPDFList();
-            document.getElementById('output').innerHTML = '';
-          "
-        >
-          Clear All
-        </button>
+<button onclick="
+  allFiles = [];
+  extractedData = {};
+  processedFiles = new Set();
+  displayPDFList();
+  document.getElementById('output').innerHTML = '';
+">
+  Clear All
+</button>
+
 
         <h4>PDF List</h4>
         <div id="pdfList"></div>
@@ -159,6 +173,21 @@
     </footer>
 
     <script>
+
+     function extractDate(fileObj) {
+  const name = fileObj.file.name;
+
+  const match = name.match(/(\d{1,2})-(\d{1,2})/);
+
+  if (!match) return null;
+
+  const day = parseInt(match[1]);
+  const month = parseInt(match[2]);
+
+  return new Date(2026, month - 1, day);
+}
+
+
       let allFiles = [];
       let extractedData = {};
       let processedFiles = new Set();
@@ -184,50 +213,75 @@
 
       fileInput.addEventListener("change", () => {
         addFiles(fileInput.files);
+         fileInput.value = ""; 
       });
 
       function addFiles(files) {
         let newFiles = [];
 
-        for (let file of files) {
-          allFiles.push(file);
+ for (let file of files) {
+  const fileObj = {
+    file: file,
+    id: Date.now() + Math.random()
+  };
 
-          if (!processedFiles.has(file.name)) {
-            newFiles.push(file);
-          }
-        }
+  allFiles.push(fileObj);
+  newFiles.push(fileObj);
+
+}
+
+              // SORT FILES HERE (ONLY HERE)
+allFiles.sort((a, b) => {
+  const dateA = extractDate(a);
+  const dateB = extractDate(b);
+
+
+  if (!dateA && !dateB) return 0;
+  if (!dateA) return 1;
+  if (!dateB) return -1;
+
+  return dateA - dateB;
+});
 
         displayPDFList();
         processNewFiles(newFiles); // auto process only new
       }
 
-      function displayPDFList() {
-        const list = document.getElementById("pdfList");
-        list.innerHTML = "";
 
-        const fileNames = allFiles.map((f) => f.name);
-        const duplicates = fileNames.filter(
-          (item, index) => fileNames.indexOf(item) !== index,
-        );
+function displayPDFList() {
+  const list = document.getElementById("pdfList");
+  list.innerHTML = "";
 
-        allFiles.forEach((file) => {
-          const isDuplicate = duplicates.includes(file.name);
+  // 👉 Step 1: get all file names
+  const fileNames = allFiles.map(fileObj => fileObj.file.name);
 
-          list.innerHTML += `
+  // 👉 Step 2: find duplicates
+  const duplicates = fileNames.filter(
+    (name, index) => fileNames.indexOf(name) !== index
+  );
+
+  // 👉 Step 3: render list
+  allFiles.forEach((fileObj, index) => {
+    const isDuplicate = duplicates.includes(fileObj.file.name);
+
+    list.innerHTML += `
       <div class="pdf-item ${isDuplicate ? "duplicate" : ""}">
-        ${file.name}
+        ${index + 1}. ${fileObj.file.name}
+        <span class="delete-btn" onclick="removeFile(${index})">❌</span>
       </div>
     `;
-        });
-      }
+  });
+}
 
       async function processNewFiles(files) {
         const output = document.getElementById("output");
 
         let allNumbers = Object.values(extractedData).flat();
 
-        for (let file of files) {
-          processedFiles.add(file.name);
+        for (let fileObj of files) {
+           let file = fileObj.file;
+          processedFiles.add(fileObj.id);
+
 
           const arrayBuffer = await file.arrayBuffer();
           const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -247,70 +301,85 @@
             matches = matches.map((num) => num.replace(/\s+/g, ""));
           }
 
-          if (matches) {
-            extractedData[file.name] = matches;
-            allNumbers.push(...matches);
-          } else {
-            extractedData[file.name] = [];
-          }
+if (matches && matches.length > 0) {
+  extractedData[fileObj.id] = matches;
+} else {
+  extractedData[fileObj.id] = [];
+
+}
+
         }
 
-        renderOutput(allNumbers);
+        renderOutput();
       }
 
-      function renderOutput(allNumbers) {
-        const output = document.getElementById("output");
-        output.innerHTML = "";
 
-        const duplicates = allNumbers.filter(
-          (item, index) => allNumbers.indexOf(item) !== index,
-        );
+      function renderOutput() {
+  const output = document.getElementById("output");
+  output.innerHTML = "";
 
-        for (let file in extractedData) {
-          let numbers = extractedData[file];
+  let allNumbers = Object.values(extractedData)
+    .filter(v => Array.isArray(v))
+    .flat();
 
-          let html = `<div style="margin-bottom:15px;">
-      <strong>${file}</strong>
+  const duplicates = allNumbers.filter(
+    (item, index) => allNumbers.indexOf(item) !== index
+  );
+
+  let i = 1;
+
+  for (let fileObj of allFiles) {
+    let file = fileObj.file.name;
+    let numbers = extractedData[fileObj.id] || [];
+
+    let html = `<div style="margin-bottom:15px;">
+      <strong>${i}. ${file}</strong>
     `;
 
-          if (numbers.length > 0) {
-            html += `<button onclick="copyNumbers('${file}', this)">Copy</button><br>`;
+    if (numbers.length > 0) {
+      html += `<button onclick="copyNumbers('${fileObj.id}', this)">Copy</button><br>`;
 
-            numbers.forEach((num) => {
-              const isDuplicate = duplicates.includes(num);
-              html += `<div class="${isDuplicate ? "duplicate" : ""}">${num}</div>`;
-            });
-          } else {
-            html += `
-        <br><span class="warning">⚠️ No text found (No OCR)</span><br>
-        <button onclick="window.open('https://www.ilovepdf.com/ocr-pdf','_blank')">
-          Perform OCR
-        </button>
-        <div class="small-tip">
-          Tip: Use PDFgear software for faster local OCR
-        </div>
-      `;
-          }
+      numbers.forEach((num) => {
+        const isDuplicate = duplicates.includes(num);
+        html += `<div class="${isDuplicate ? "duplicate" : ""}">${num}</div>`;
+      });
+    } else {
+      html += `<div class="warning">⚠️ No numbers found</div>`;
+    }
 
-          html += "</div>";
-          output.innerHTML += html;
-        }
-      }
+    html += "</div>";
+    output.innerHTML += html;
 
-      function copyNumbers(fileName, btn) {
-        const numbers = extractedData[fileName];
-        navigator.clipboard.writeText(numbers.join("\n"));
+    i++;
+  }
+}
 
-        // Change button text + style
-        btn.innerText = "Copied";
-        btn.style.background = "#16a34a"; // green
 
-        // Reset after 2 seconds
-        setTimeout(() => {
-          btn.innerText = "Copy";
-          btn.style.background = "#2563eb"; // original blue
-        }, 2000);
-      }
+function removeFile(index) {
+  const fileId = allFiles[index].id;
+
+  allFiles.splice(index, 1);
+
+  delete extractedData[fileId];
+  processedFiles.delete(fileId);
+
+  displayPDFList();
+  renderOutput();
+}
+
+
+function copyNumbers(fileId, btn) {
+  const numbers = extractedData[fileId] || [];
+  navigator.clipboard.writeText(numbers.join("\n"));
+
+  btn.innerText = "Copied";
+  btn.style.background = "#16a34a";
+
+  setTimeout(() => {
+    btn.innerText = "Copy";
+    btn.style.background = "#2563eb";
+  }, 2000);
+}
 
       function downloadCSV() {
         let csv = "File,Number\n";
