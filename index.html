@@ -3,8 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PDF Extractor Dashboard</title>
+    <title>PDF Tracking Extractor (USPS)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script>
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
 
     <style>
       html,
@@ -112,22 +118,77 @@
         }
       }
 
+      .blink {
+        animation: blink 1s infinite;
+      }
+
+      @keyframes blink {
+        0% {
+          opacity: 0.2;
+        }
+        50% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0.2;
+        }
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      /* Open button always visible */
+      .open-btn {
+        background: #22c55e;
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+      }
+
+      /* Delete hidden by default */
       .delete-btn {
-  float: right;
-  cursor: pointer;
-  display: none;
-  color: red;
-}
+        opacity: 0;
+        transition: 0.2s;
+      }
 
-.pdf-item:hover .delete-btn {
-  display: inline;
-}
+      /* Show delete on hover */
+      .pdf-item:hover .delete-btn {
+        opacity: 1;
+      }
+      .delete-btn {
+        float: right;
+        cursor: pointer;
+      }
 
+      .ocr-loader {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: #2563eb;
+        font-size: 13px;
+      }
+
+      .spinner {
+        width: 12px;
+        height: 12px;
+        border: 2px solid #2563eb;
+        border-top: 2px solid transparent;
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
     </style>
   </head>
 
   <body>
-    <header>PDF Tracking Extractor</header>
+    <header>PDF Tracking Extractor (USPS)</header>
 
     <div class="container">
       <!-- LEFT PANEL -->
@@ -143,19 +204,20 @@
           hidden
         />
 
-        <button onclick="processPDFs()">Extract Numbers</button>
-        <button onclick="fileInput.click()">Add More PDFs</button>
         <button onclick="downloadCSV()">Download CSV</button>
-<button onclick="
-  allFiles = [];
-  extractedData = {};
-  processedFiles = new Set();
-  displayPDFList();
-  document.getElementById('output').innerHTML = '';
-">
-  Clear All
-</button>
-
+        <button
+          onclick="
+            allFiles = [];
+            extractedData = {};
+            processedFiles = new Set();
+            ocrQueue = [];
+            ocrStatus = {};
+            displayPDFList();
+            document.getElementById('output').innerHTML = '';
+          "
+        >
+          Clear All
+        </button>
 
         <h4>PDF List</h4>
         <div id="pdfList"></div>
@@ -163,7 +225,14 @@
 
       <!-- RIGHT PANEL -->
       <div id="right" class="card">
+        <button onclick="removeDuplicateFiles()" style="float: right">
+          Remove Duplicates
+        </button>
         <h3>Extracted Data</h3>
+
+        <div id="loader" style="display: none; font-size: 14px; color: #666">
+          🔄 Extracting tracking numbers<span class="blink">...</span>
+        </div>
         <div id="output"></div>
       </div>
     </div>
@@ -173,24 +242,25 @@
     </footer>
 
     <script>
+      function extractDate(fileObj) {
+        const name = fileObj.file.name;
 
-     function extractDate(fileObj) {
-  const name = fileObj.file.name;
+        const match = name.match(/(\d{1,2})-(\d{1,2})/);
 
-  const match = name.match(/(\d{1,2})-(\d{1,2})/);
+        if (!match) return null;
 
-  if (!match) return null;
+        const day = parseInt(match[1]);
+        const month = parseInt(match[2]);
 
-  const day = parseInt(match[1]);
-  const month = parseInt(match[2]);
-
-  return new Date(2026, month - 1, day);
-}
-
+        return new Date(2026, month - 1, day);
+      }
 
       let allFiles = [];
       let extractedData = {};
       let processedFiles = new Set();
+      let ocrStatus = {};
+      let ocrQueue = [];
+      let isOCRRunning = false;
 
       const dropZone = document.getElementById("dropZone");
       const fileInput = document.getElementById("pdfUpload");
@@ -213,65 +283,62 @@
 
       fileInput.addEventListener("change", () => {
         addFiles(fileInput.files);
-         fileInput.value = ""; 
+        fileInput.value = "";
       });
 
       function addFiles(files) {
         let newFiles = [];
 
- for (let file of files) {
-  const fileObj = {
-    file: file,
-    id: Date.now() + Math.random()
-  };
+        for (let file of files) {
+          const fileObj = {
+            file: file,
+            id: Date.now() + Math.random(),
+          };
 
-  allFiles.push(fileObj);
-  newFiles.push(fileObj);
+          allFiles.push(fileObj);
+          newFiles.push(fileObj);
+        }
 
-}
+        // SORT FILES HERE (ONLY HERE)
+        allFiles.sort((a, b) => {
+          const dateA = extractDate(a);
+          const dateB = extractDate(b);
 
-              // SORT FILES HERE (ONLY HERE)
-allFiles.sort((a, b) => {
-  const dateA = extractDate(a);
-  const dateB = extractDate(b);
+          if (!dateA && !dateB) return 0;
+          if (!dateA) return 1;
+          if (!dateB) return -1;
 
-
-  if (!dateA && !dateB) return 0;
-  if (!dateA) return 1;
-  if (!dateB) return -1;
-
-  return dateA - dateB;
-});
+          return dateA - dateB;
+        });
 
         displayPDFList();
         processNewFiles(newFiles); // auto process only new
       }
 
+      function displayPDFList() {
+        const list = document.getElementById("pdfList");
+        list.innerHTML = "";
 
-function displayPDFList() {
-  const list = document.getElementById("pdfList");
-  list.innerHTML = "";
+        // 👉 Step 1: get all file names
+        const fileNames = allFiles.map((fileObj) => fileObj.file.name);
 
-  // 👉 Step 1: get all file names
-  const fileNames = allFiles.map(fileObj => fileObj.file.name);
+        // 👉 Step 2: find duplicates
+        const duplicates = fileNames.filter(
+          (name, index) => fileNames.indexOf(name) !== index,
+        );
 
-  // 👉 Step 2: find duplicates
-  const duplicates = fileNames.filter(
-    (name, index) => fileNames.indexOf(name) !== index
-  );
+        // 👉 Step 3: render list
+        allFiles.forEach((fileObj, index) => {
+          const isDuplicate = duplicates.includes(fileObj.file.name);
 
-  // 👉 Step 3: render list
-  allFiles.forEach((fileObj, index) => {
-    const isDuplicate = duplicates.includes(fileObj.file.name);
-
-    list.innerHTML += `
-      <div class="pdf-item ${isDuplicate ? "duplicate" : ""}">
-        ${index + 1}. ${fileObj.file.name}
-        <span class="delete-btn" onclick="removeFile(${index})">❌</span>
-      </div>
-    `;
-  });
-}
+          list.innerHTML += `
+        <div class="pdf-item ${isDuplicate ? "duplicate" : ""}">
+          ${index + 1}. ${fileObj.file.name}
+          <span class="delete-btn" onclick="removeFile(${index})">❌</span>
+        </div>
+      `;
+        });
+      }
 
       async function processNewFiles(files) {
         const output = document.getElementById("output");
@@ -279,12 +346,12 @@ function displayPDFList() {
         let allNumbers = Object.values(extractedData).flat();
 
         for (let fileObj of files) {
-           let file = fileObj.file;
+          let file = fileObj.file;
           processedFiles.add(fileObj.id);
-
 
           const arrayBuffer = await file.arrayBuffer();
           const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+          fileObj.pageCount = pdf.numPages;
 
           let fullText = "";
 
@@ -295,91 +362,163 @@ function displayPDFList() {
             fullText += strings.join(" ") + " ";
           }
 
-          let matches = fullText.match(/(\d[\d\s]{10,}\d)/g);
+          let cleanText = fullText.replace(/\s+/g, " ");
+          let lowerText = cleanText.toLowerCase();
 
-          if (matches) {
-            matches = matches.map((num) => num.replace(/\s+/g, ""));
+          let matches = [];
+
+          // find all "tracking" occurrences
+          let index = 0;
+
+          while ((index = lowerText.indexOf("tracking", index)) !== -1) {
+            // take nearby text after "tracking"
+            let slice = cleanText.slice(index, index + 120);
+
+            // find tracking-like numbers (starts with 9, long)
+            let found = slice.match(/(9\d[\d\s]{18,})/g);
+
+            if (found) {
+              found.forEach((num) => {
+                let cleaned = num.replace(/\s+/g, "");
+
+                // filter valid length
+                if (cleaned.length >= 20 && cleaned.length <= 26) {
+                  matches.push(cleaned);
+                }
+              });
+            }
+
+            index += 8; // move forward
           }
 
-if (matches && matches.length > 0) {
-  extractedData[fileObj.id] = matches;
-} else {
-  extractedData[fileObj.id] = [];
+          if (matches && matches.length > 0) {
+            extractedData[fileObj.id] = matches;
+          } else {
+            extractedData[fileObj.id] = [];
 
-}
-
+            // ✅ ADD TO QUEUE INSTEAD
+            ocrQueue.push(fileObj);
+            ocrStatus[fileObj.id] = "pending";
+            processOCRQueue();
+          }
         }
 
         renderOutput();
       }
 
-
       function renderOutput() {
-  const output = document.getElementById("output");
-  output.innerHTML = "";
+        const output = document.getElementById("output");
+        if (!output) return;
 
-  let allNumbers = Object.values(extractedData)
-    .filter(v => Array.isArray(v))
-    .flat();
+        output.innerHTML = "";
 
-  const duplicates = allNumbers.filter(
-    (item, index) => allNumbers.indexOf(item) !== index
-  );
+        let allNumbers = Object.values(extractedData)
+          .filter((v) => Array.isArray(v))
+          .flat();
 
-  let i = 1;
+        const duplicates = allNumbers.filter(
+          (item, index) => allNumbers.indexOf(item) !== index,
+        );
 
-  for (let fileObj of allFiles) {
-    let file = fileObj.file.name;
-    let numbers = extractedData[fileObj.id] || [];
+        let i = 1;
 
-    let html = `<div style="margin-bottom:15px;">
-      <strong>${i}. ${file}</strong>
+        for (let fileObj of allFiles) {
+          let file = fileObj.file.name;
+          let numbers = extractedData[fileObj.id] || [];
+          let pageCount = fileObj.pageCount || 0;
+          let foundCount = numbers.length;
+          let mismatch = pageCount !== foundCount;
+
+          let html = `
+      <div style="margin-bottom:15px; border-bottom:1px solid #eee; padding-bottom:10px;">
+        
+        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+          
+          <div>
+            <strong style="${mismatch ? "color:red;" : ""}">
+              ${i}. ${file}
+            </strong>
+
+            <div style="font-size:12px; color:#666;">
+              Pages: ${pageCount} | Found: ${foundCount}
+            </div>
+          </div>
+
+          <div>
+            <button onclick="copyNumbers('${fileObj.id}', this)">Copy</button>
+            <button onclick="openPDF('${fileObj.id}')">Open</button>
+            <button onclick="removeFileById('${fileObj.id}')">❌</button>
+          </div>
+
+        </div>
     `;
 
-    if (numbers.length > 0) {
-      html += `<button onclick="copyNumbers('${fileObj.id}', this)">Copy</button><br>`;
+          const status = ocrStatus[fileObj.id];
+          if (numbers.length > 0) {
+            numbers.forEach((num) => {
+              const isDuplicate = duplicates.includes(num);
+              html += `<div class="${isDuplicate ? "duplicate" : ""}">${num}</div>`;
+            });
+          } else {
+            if (status === "pending") {
+              html += `<div>⏳ Waiting for OCR...</div>`;
+            } else if (status === "processing") {
+              html += `
+      <div class="ocr-loader">
+        <span class="spinner"></span>
+        Performing OCR... please wait
+      </div>
+    `;
+            } else {
+              html += `<div class="warning">⚠️ No tracking found</div>`;
+            }
+          }
 
-      numbers.forEach((num) => {
-        const isDuplicate = duplicates.includes(num);
-        html += `<div class="${isDuplicate ? "duplicate" : ""}">${num}</div>`;
-      });
-    } else {
-      html += `<div class="warning">⚠️ No numbers found</div>`;
-    }
+          html += `</div>`;
 
-    html += "</div>";
-    output.innerHTML += html;
+          output.innerHTML += html;
+          i++;
+        }
+        console.log("Rendering", allFiles, extractedData, ocrStatus);
+      }
 
-    i++;
-  }
-}
+      function removeFileById(fileId) {
+        const index = allFiles.findIndex((f) => f.id == fileId);
+        if (index === -1) return;
 
+        allFiles.splice(index, 1);
 
-function removeFile(index) {
-  const fileId = allFiles[index].id;
+        delete extractedData[fileId];
+        processedFiles.delete(fileId);
 
-  allFiles.splice(index, 1);
+        displayPDFList();
+        renderOutput();
+      }
 
-  delete extractedData[fileId];
-  processedFiles.delete(fileId);
+      function removeFile(index) {
+        const fileId = allFiles[index].id;
 
-  displayPDFList();
-  renderOutput();
-}
+        allFiles.splice(index, 1);
 
+        delete extractedData[fileId];
+        processedFiles.delete(fileId);
 
-function copyNumbers(fileId, btn) {
-  const numbers = extractedData[fileId] || [];
-  navigator.clipboard.writeText(numbers.join("\n"));
+        displayPDFList();
+        renderOutput();
+      }
 
-  btn.innerText = "Copied";
-  btn.style.background = "#16a34a";
+      function copyNumbers(fileId, btn) {
+        const numbers = extractedData[fileId] || [];
+        navigator.clipboard.writeText(numbers.join("\n"));
 
-  setTimeout(() => {
-    btn.innerText = "Copy";
-    btn.style.background = "#2563eb";
-  }, 2000);
-}
+        btn.innerText = "Copied";
+        btn.style.background = "#16a34a";
+
+        setTimeout(() => {
+          btn.innerText = "Copy";
+          btn.style.background = "#2563eb";
+        }, 2000);
+      }
 
       function downloadCSV() {
         let csv = "File,Number\n";
@@ -395,6 +534,120 @@ function copyNumbers(fileId, btn) {
         link.href = URL.createObjectURL(blob);
         link.download = "extracted_data.csv";
         link.click();
+      }
+
+      function openPDF(fileId) {
+        const fileObj = allFiles.find((f) => f.id == fileId);
+        if (!fileObj) return;
+
+        const url = URL.createObjectURL(fileObj.file);
+        window.open(url);
+      }
+
+      function removeDuplicateFiles() {
+        let seenSets = [];
+
+        allFiles = allFiles.filter((fileObj) => {
+          let numbers = extractedData[fileObj.id] || [];
+
+          // normalize numbers
+          let key = numbers.slice().sort().join(",");
+
+          if (!key) return true;
+
+          if (seenSets.includes(key)) {
+            // duplicate file → remove
+            delete extractedData[fileObj.id];
+            return false;
+          }
+
+          seenSets.push(key);
+
+          // also clean duplicates inside file
+          extractedData[fileObj.id] = [...new Set(numbers)];
+
+          return true;
+        });
+
+        renderOutput();
+        displayPDFList();
+      }
+
+      async function processOCRQueue() {
+        if (isOCRRunning || ocrQueue.length === 0) return;
+
+        isOCRRunning = true;
+
+        const fileObj = ocrQueue.shift();
+
+        ocrStatus[fileObj.id] = "processing";
+        renderOutput(); // show loader
+
+        await runOCR(fileObj);
+
+        ocrStatus[fileObj.id] = "done";
+
+        isOCRRunning = false;
+
+        processOCRQueue(); // process next
+      }
+
+      async function runOCR(fileObj) {
+        const file = fileObj.file;
+        const pdf = await pdfjsLib.getDocument({
+          data: await file.arrayBuffer(),
+        }).promise;
+
+        let fullText = "";
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+
+          const viewport = page.getViewport({ scale: 3 });
+          const canvas = document.createElement("canvas");
+          const context = canvas.getContext("2d");
+
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+
+          await page.render({
+            canvasContext: context,
+            viewport: viewport,
+          }).promise;
+
+          const {
+            data: { text },
+          } = await Tesseract.recognize(canvas, "eng");
+
+          fullText += text + " ";
+        }
+
+        // extraction logic
+        let cleanText = fullText.replace(/\s+/g, " ");
+        let lowerText = cleanText.toLowerCase();
+
+        let matches = [];
+        let index = 0;
+
+        while ((index = lowerText.indexOf("tracking", index)) !== -1) {
+          let slice = cleanText.slice(index, index + 120);
+          let found = slice.match(/(9\d[\d\s]{18,})/g);
+
+          if (found) {
+            found.forEach((num) => {
+              let cleaned = num.replace(/\s+/g, "");
+              if (cleaned.length >= 20 && cleaned.length <= 26) {
+                matches.push(cleaned);
+              }
+            });
+          }
+
+          index += 8;
+        }
+
+        extractedData[fileObj.id] = matches || [];
+
+        renderOutput(); // update UI after OCR
       }
     </script>
   </body>
